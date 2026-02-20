@@ -100,49 +100,46 @@ app.post("/merge", async (req, res) => {
     /* ------------------------------ */
     /* 🎵 STEP 2 - ADD AUDIO          */
     /* ------------------------------ */
+    
     ffmpeg()
-      .input(mergedVideo)
-      .input(audioPath)
-      .outputOptions([
-        "-map 0:v:0",
-        "-map 1:a:0",
-        "-shortest",
-        "-c:v copy",
-        "-c:a aac",
-        "-b:a 128k"
-      ])
-      .save(finalOutput)
-      .on("end", () => {
+  .input(mergedVideo)
+  .input(audioPath)
+  .outputOptions([
+    "-map 0:v:0",
+    "-map 1:a:0",
+    "-shortest",
+    "-c:v copy",
+    "-c:a aac",
+    "-b:a 128k",
+    "-af loudnorm=I=-14:TP=-1.5:LRA=11"
+  ])
+  .save(finalOutput)
+  .on("end", () => {
 
-        const stream = fs.createReadStream(finalOutput);
-        res.setHeader("Content-Type", "video/mp4");
-        stream.pipe(res);
+    const stream = fs.createReadStream(finalOutput);
+    res.setHeader("Content-Type", "video/mp4");
+    stream.pipe(res);
 
-        stream.on("close", () => {
-          [
-            video1Path,
-            video2Path,
-            audioPath,
-            concatFile,
-            mergedVideo,
-            finalOutput
-          ].forEach(file => {
-            if (fs.existsSync(file)) {
-              fs.unlinkSync(file);
-            }
-          });
-        });
-      })
-      .on("error", (err) => {
-        console.error("FFmpeg error:", err);
-        res.status(500).json({ error: err.message });
+    stream.on("close", () => {
+      [
+        video1Path,
+        video2Path,
+        audioPath,
+        concatFile,
+        mergedVideo,
+        finalOutput
+      ].forEach(file => {
+        if (fs.existsSync(file)) {
+          fs.unlinkSync(file);
+        }
       });
-
-  } catch (err) {
-    console.error("Server error:", err);
+    });
+  })
+  .on("error", (err) => {
+    console.error("FFmpeg error:", err);
     res.status(500).json({ error: err.message });
-  }
-});
+  });
+
 
 /* ================================= */
 /* 🚀 START SERVER                   */
