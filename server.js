@@ -3,9 +3,28 @@ const ffmpeg = require("fluent-ffmpeg");
 const axios = require("axios");
 const fs = require("fs");
 const { v4: uuidv4 } = require("uuid");
+const { exec } = require("child_process");
 
 const app = express();
 app.use(express.json());
+
+/* 🔎 TEST FFMPEG */
+app.get("/ffmpeg-test", (req, res) => {
+  exec("ffmpeg -version", (error, stdout, stderr) => {
+    if (error) {
+      return res.json({
+        success: false,
+        error: error.message,
+        stderr: stderr
+      });
+    }
+
+    res.json({
+      success: true,
+      output: stdout
+    });
+  });
+});
 
 app.post("/merge", async (req, res) => {
   try {
@@ -21,12 +40,17 @@ app.post("/merge", async (req, res) => {
       const writer = fs.createWriteStream(path);
       const response = await axios({ url, method: "GET", responseType: "stream" });
       response.data.pipe(writer);
-      return new Promise((resolve) => writer.on("finish", resolve));
+      return new Promise((resolve, reject) => {
+        writer.on("finish", resolve);
+        writer.on("error", reject);
+      });
     };
 
     await download(video1, video1Path);
     await download(video2, video2Path);
-    await download(audio, audioPath);
+    if (audio) {
+      await download(audio, audioPath);
+    }
 
     ffmpeg()
       .input(video1Path)
@@ -42,6 +66,9 @@ app.post("/merge", async (req, res) => {
       .save(outputPath)
       .on("end", () => {
         res.download(outputPath);
+      })
+      .on("error", (err) => {
+        res.status(500).json({ error: err.message });
       });
 
   } catch (err) {
