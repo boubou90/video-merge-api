@@ -58,45 +58,59 @@ app.post("/merge", async (req, res) => {
     fs.writeFileSync(textFile, hook);
 
     ffmpeg()
-      .input(v1)
-      .input(v2)
-      .input(a1)
-      .complexFilter([
-        // concat videos
-        "[0:v][1:v]concat=n=2:v=1:a=0[outv]",
-        // normalize audio
-        "[2:a]loudnorm[aout]"
-      ])
-      .outputOptions([
-        "-map [outv]",
-        "-map [aout]",
-        "-preset ultrafast",
-        "-crf 28",
-        "-movflags +faststart",
-        "-vf",
-        `drawtext=textfile='${textFile}':fontcolor=white:fontsize=60:borderw=3:bordercolor=black:x=(w-text_w)/2:y=120`
-      ])
-      .videoCodec("libx264")
-      .audioCodec("aac")
-      .on("end", () => {
-        res.download(output, () => {
-          // cleanup files
-          [v1, v2, a1, textFile, output].forEach(file => {
-            if (fs.existsSync(file)) fs.unlinkSync(file);
-          });
-        });
-      })
-      .on("error", (err) => {
-        console.error("FFmpeg error:", err);
-        res.status(500).json({ error: err.message });
-      })
-      .save(output);
-
-  } catch (err) {
-    console.error("Server error:", err);
+  .input(v1)
+  .input(v2)
+  .input(a1)
+  .complexFilter([
+    {
+      filter: "concat",
+      options: { n: 2, v: 1, a: 0 },
+      inputs: ["0:v", "1:v"],
+      outputs: "vout"
+    },
+    {
+      filter: "drawtext",
+      options: {
+        fontfile: "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+        textfile: textFile,
+        fontcolor: "white",
+        fontsize: 60,
+        borderw: 3,
+        bordercolor: "black",
+        x: "(w-text_w)/2",
+        y: "120"
+      },
+      inputs: "vout",
+      outputs: "vfinal"
+    },
+    {
+      filter: "loudnorm",
+      inputs: "2:a",
+      outputs: "afinal"
+    }
+  ])
+  .outputOptions([
+    "-map [vfinal]",
+    "-map [afinal]",
+    "-preset ultrafast",
+    "-crf 28",
+    "-movflags +faststart"
+  ])
+  .videoCodec("libx264")
+  .audioCodec("aac")
+  .on("end", () => {
+    res.download(output, () => {
+      [v1, v2, a1, textFile, output].forEach(file => {
+        if (fs.existsSync(file)) fs.unlinkSync(file);
+      });
+    });
+  })
+  .on("error", (err) => {
+    console.error("FFmpeg error:", err);
     res.status(500).json({ error: err.message });
-  }
-});
+  })
+  .save(output);
+
 
 // ----------------------
 // HEALTH CHECK
