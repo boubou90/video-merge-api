@@ -6,16 +6,20 @@ const path = require("path");
 const { v4: uuidv4 } = require("uuid");
 
 const app = express();
-app.use(express.json());
+app.use(express.json({ limit: "10mb" }));
 
 const TMP_DIR = "/tmp";
 
+// --------------------------------------------------
+// STREAM DOWNLOAD (évite surcharge mémoire)
+// --------------------------------------------------
 async function downloadFile(url, filepath) {
   const writer = fs.createWriteStream(filepath);
+
   const response = await axios({
     url,
     method: "GET",
-    responseType: "stream"
+    responseType: "stream",
   });
 
   return new Promise((resolve, reject) => {
@@ -25,13 +29,16 @@ async function downloadFile(url, filepath) {
   });
 }
 
+// --------------------------------------------------
+// MERGE ROUTE
+// --------------------------------------------------
 app.post("/merge", async (req, res) => {
   try {
     const { video1, video2, audio, hook } = req.body;
 
     if (!video1 || !video2 || !audio || !hook) {
       return res.status(400).json({
-        error: "video1, video2, audio and hook are required"
+        error: "video1, video2, audio and hook are required",
       });
     }
 
@@ -43,11 +50,16 @@ app.post("/merge", async (req, res) => {
     const textFile = path.join(TMP_DIR, `${id}_text.txt`);
     const output = path.join(TMP_DIR, `${id}_final.mp4`);
 
+    console.log("Downloading assets...");
+
     await downloadFile(video1, v1);
     await downloadFile(video2, v2);
     await downloadFile(audio, a1);
 
+    // sécurise les caractères spéciaux
     fs.writeFileSync(textFile, hook);
+
+    console.log("Starting ffmpeg...");
 
     ffmpeg()
       .input(v1)
@@ -58,41 +70,40 @@ app.post("/merge", async (req, res) => {
           filter: "concat",
           options: { n: 2, v: 1, a: 0 },
           inputs: ["0:v", "1:v"],
-          outputs: "vout"
+          outputs: "vout",
         },
         {
           filter: "drawtext",
           options: {
-            fontfile: "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+            fontfile:
+              "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
             textfile: textFile,
             fontcolor: "white",
-            fontsize: 60,
-            borderw: 3,
+            fontsize: 48,
+            borderw: 2,
             bordercolor: "black",
             x: "(w-text_w)/2",
-            y: "120"
+            y: "100",
           },
           inputs: "vout",
-          outputs: "vfinal"
+          outputs: "vfinal",
         },
-        {
-          filter: "loudnorm",
-          inputs: "2:a",
-          outputs: "afinal"
-        }
       ])
       .outputOptions([
         "-map [vfinal]",
-        "-map [afinal]",
+        "-map 2:a",
         "-preset ultrafast",
-        "-crf 28",
-        "-movflags +faststart"
+        "-crf 32",
+        "-threads 1",
+        "-movflags +faststart",
       ])
       .videoCodec("libx264")
       .audioCodec("aac")
       .on("end", () => {
+        console.log("FFmpeg finished");
+
         res.download(output, () => {
-          [v1, v2, a1, textFile, output].forEach(file => {
+          [v1, v2, a1, textFile, output].forEach((file) => {
             if (fs.existsSync(file)) fs.unlinkSync(file);
           });
         });
@@ -102,17 +113,22 @@ app.post("/merge", async (req, res) => {
         res.status(500).json({ error: err.message });
       })
       .save(output);
-
   } catch (err) {
     console.error("Server error:", err);
     res.status(500).json({ error: err.message });
   }
-}); // ← ICI c’était ce qui manquait
+});
 
+// --------------------------------------------------
+// HEALTH CHECK
+// --------------------------------------------------
 app.get("/health", (req, res) => {
   res.json({ status: "ok" });
 });
 
+// --------------------------------------------------
+// START SERVER
+// --------------------------------------------------
 app.listen(process.env.PORT || 3000, () => {
   console.log("Server running");
 });
