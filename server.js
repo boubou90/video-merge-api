@@ -8,16 +8,16 @@ const { exec } = require("child_process");
 const app = express();
 app.use(express.json());
 
-/* ================================= */
-/* 🔎 HEALTH CHECK                   */
-/* ================================= */
+/* ============================= */
+/* 🔎 HEALTH CHECK               */
+/* ============================= */
 app.get("/health", (req, res) => {
   res.json({ status: "ok" });
 });
 
-/* ================================= */
-/* 🔎 FFMPEG TEST                    */
-/* ================================= */
+/* ============================= */
+/* 🔎 FFMPEG TEST                */
+/* ============================= */
 app.get("/ffmpeg-test", (req, res) => {
   exec("ffmpeg -version", (error, stdout) => {
     if (error) {
@@ -27,16 +27,16 @@ app.get("/ffmpeg-test", (req, res) => {
   });
 });
 
-/* ================================= */
-/* 🎬 MERGE + MUSIC ENDPOINT         */
-/* ================================= */
+/* ============================= */
+/* 🎬 MERGE + MUSIC + HOOK       */
+/* ============================= */
 app.post("/merge", async (req, res) => {
   try {
-    const { video1, video2, audio } = req.body;
+    const { video1, video2, audio, hook } = req.body;
 
-    if (!video1 || !video2 || !audio) {
+    if (!video1 || !video2 || !audio || !hook) {
       return res.status(400).json({
-        error: "video1, video2 and audio are required"
+        error: "video1, video2, audio and hook are required"
       });
     }
 
@@ -49,9 +49,9 @@ app.post("/merge", async (req, res) => {
     const mergedVideo = `/tmp/${id}_merged.mp4`;
     const finalOutput = `/tmp/${id}_final.mp4`;
 
-    /* ------------------------------ */
-    /* ⬇️ DOWNLOAD FUNCTION           */
-    /* ------------------------------ */
+    /* ============================= */
+    /* ⬇️ DOWNLOAD FUNCTION          */
+    /* ============================= */
     const download = async (url, filePath) => {
       const writer = fs.createWriteStream(filePath);
       const response = await axios({
@@ -68,25 +68,24 @@ app.post("/merge", async (req, res) => {
       });
     };
 
-    /* ------------------------------ */
-    /* ⬇️ DOWNLOAD FILES              */
-    /* ------------------------------ */
+    /* ============================= */
+    /* ⬇️ DOWNLOAD FILES             */
+    /* ============================= */
     await download(video1, video1Path);
     await download(video2, video2Path);
     await download(audio, audioPath);
 
-    /* ------------------------------ */
-    /* 📝 CREATE CONCAT FILE          */
-    /* ------------------------------ */
+    /* ============================= */
+    /* 📝 CREATE CONCAT FILE         */
+    /* ============================= */
     fs.writeFileSync(
       concatFile,
       `file '${video1Path}'\nfile '${video2Path}'`
     );
 
-    /* ------------------------------ */
-    /* 🎬 STEP 1 - MERGE VIDEOS       */
-    /* (NO RE-ENCODE, LOW RAM)        */
-    /* ------------------------------ */
+    /* ============================= */
+    /* 🎬 STEP 1 - MERGE VIDEOS      */
+    /* ============================= */
     await new Promise((resolve, reject) => {
       ffmpeg()
         .input(concatFile)
@@ -97,53 +96,75 @@ app.post("/merge", async (req, res) => {
         .on("error", reject);
     });
 
-    /* ------------------------------ */
-    /* 🎵 STEP 2 - ADD AUDIO          */
-    /* ------------------------------ */
-    
+    /* ============================= */
+    /* 🎵 STEP 2 - ADD AUDIO + HOOK  */
+    /* ============================= */
     ffmpeg()
-  .input(mergedVideo)
-  .input(audioPath)
-  .outputOptions([
-    "-map 0:v:0",
-    "-map 1:a:0",
-    "-shortest",
-    "-c:v copy",
-    "-c:a aac",
-    "-b:a 128k",
-    "-af loudnorm=I=-14:TP=-1.5:LRA=11"
-  ])
-  .save(finalOutput)
-  .on("end", () => {
-
-    const stream = fs.createReadStream(finalOutput);
-    res.setHeader("Content-Type", "video/mp4");
-    stream.pipe(res);
-
-    stream.on("close", () => {
-      [
-        video1Path,
-        video2Path,
-        audioPath,
-        concatFile,
-        mergedVideo,
-        finalOutput
-      ].forEach(file => {
-        if (fs.existsSync(file)) {
-          fs.unlinkSync(file);
+      .input(mergedVideo)
+      .input(audioPath)
+      .complexFilter([
+        {
+          filter: "drawtext",
+          options: {
+            fontfile: "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+            text: hook,
+            fontsize: 60,
+            fontcolor: "white",
+            x: "(w-text_w)/2",
+            y: "80",
+            box: 1,
+            boxcolor: "black@0.6",
+            boxborderw: 20,
+            enable: "between(t,0,4)"
+          }
         }
+      ])
+      .outputOptions([
+        "-map 0:v:0",
+        "-map 1:a:0",
+        "-shortest",
+        "-c:v libx264",
+        "-preset veryfast",
+        "-c:a aac",
+        "-b:a 128k",
+        "-af loudnorm=I=-14:TP=-1.5:LRA=11"
+      ])
+      .save(finalOutput)
+      .on("end", () => {
+
+        const stream = fs.createReadStream(finalOutput);
+        res.setHeader("Content-Type", "video/mp4");
+        stream.pipe(res);
+
+        stream.on("close", () => {
+          [
+            video1Path,
+            video2Path,
+            audioPath,
+            concatFile,
+            mergedVideo,
+            finalOutput
+          ].forEach(file => {
+            if (fs.existsSync(file)) {
+              fs.unlinkSync(file);
+            }
+          });
+        });
+      })
+      .on("error", (err) => {
+        console.error("FFmpeg error:", err);
+        res.status(500).json({ error: err.message });
       });
-    });
-  })
-  .on("error", (err) => {
-    console.error("FFmpeg error:", err);
+
+  } catch (err) {
+    console.error("Server error:", err);
     res.status(500).json({ error: err.message });
-  });
+  }
+});
 
-
-/* ================================= */
-/* 🚀 START SERVER                   */
-/* ================================= */
+/* ============================= */
+/* 🚀 START SERVER               */
+/* ============================= */
 const PORT = process.env.PORT || 3000;
 
 app.listen(PORT, () => {
