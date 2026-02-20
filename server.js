@@ -11,7 +11,7 @@ app.use(express.json({ limit: "10mb" }));
 const TMP_DIR = "/tmp";
 
 // --------------------------------------------------
-// STREAM DOWNLOAD (évite surcharge mémoire)
+// STREAM DOWNLOAD
 // --------------------------------------------------
 async function downloadFile(url, filepath) {
   const writer = fs.createWriteStream(filepath);
@@ -56,7 +56,6 @@ app.post("/merge", async (req, res) => {
     await downloadFile(video2, v2);
     await downloadFile(audio, a1);
 
-    // sécurise les caractères spéciaux
     fs.writeFileSync(textFile, hook);
 
     console.log("Starting ffmpeg...");
@@ -102,21 +101,44 @@ app.post("/merge", async (req, res) => {
       .on("end", () => {
         console.log("FFmpeg finished");
 
-        res.download(output, () => {
+        // On ne renvoie PAS le fichier ici
+        res.json({
+          success: true,
+          id: id,
+          downloadUrl: `/download/${id}`,
+        });
+
+        // Nettoyage automatique après 2 minutes
+        setTimeout(() => {
           [v1, v2, a1, textFile, output].forEach((file) => {
             if (fs.existsSync(file)) fs.unlinkSync(file);
           });
-        });
+        }, 120000);
       })
       .on("error", (err) => {
         console.error("FFmpeg error:", err);
         res.status(500).json({ error: err.message });
       })
       .save(output);
+
   } catch (err) {
     console.error("Server error:", err);
     res.status(500).json({ error: err.message });
   }
+});
+
+// --------------------------------------------------
+// DOWNLOAD ROUTE
+// --------------------------------------------------
+app.get("/download/:id", (req, res) => {
+  const id = req.params.id;
+  const filePath = path.join(TMP_DIR, `${id}_final.mp4`);
+
+  if (!fs.existsSync(filePath)) {
+    return res.status(404).json({ error: "File not found" });
+  }
+
+  res.sendFile(filePath);
 });
 
 // --------------------------------------------------
