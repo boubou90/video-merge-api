@@ -10,9 +10,6 @@ app.use(express.json());
 
 const TMP_DIR = "/tmp";
 
-// --------------------------------------------------
-// DOWNLOAD STREAM SAFE
-// --------------------------------------------------
 async function downloadFile(url, filepath) {
   const writer = fs.createWriteStream(filepath);
   const response = await axios({
@@ -29,9 +26,6 @@ async function downloadFile(url, filepath) {
   });
 }
 
-// --------------------------------------------------
-// MERGE ROUTE
-// --------------------------------------------------
 app.post("/merge", async (req, res) => {
   try {
     const { video1, video2, audio, hook } = req.body;
@@ -50,78 +44,56 @@ app.post("/merge", async (req, res) => {
     const textFile = path.join(TMP_DIR, `${id}_text.txt`);
     const output = path.join(TMP_DIR, `${id}_final.mp4`);
 
-    console.log("Downloading assets...");
-
+    console.log("Downloading files...");
     await downloadFile(video1, v1);
     await downloadFile(video2, v2);
     await downloadFile(audio, a1);
 
     fs.writeFileSync(textFile, hook);
 
-    console.log("Starting ffmpeg...");
+    console.log("Running lightweight ffmpeg...");
 
     ffmpeg()
       .input(v1)
       .input(v2)
       .input(a1)
-      .inputOptions(["-stream_loop -1"]) // 🔥 loop audio
       .complexFilter([
-        // Concat video
         {
           filter: "concat",
           options: { n: 2, v: 1, a: 0 },
           inputs: ["0:v", "1:v"],
-          outputs: "vconcat"
+          outputs: "vout"
         },
-
-        // Stabilise fps
-        {
-          filter: "fps",
-          options: 30,
-          inputs: "vconcat",
-          outputs: "vfps"
-        },
-
-        // Hook text
         {
           filter: "drawtext",
           options: {
             fontfile: "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
             textfile: textFile,
             fontcolor: "white",
-            fontsize: 60,
-            borderw: 3,
+            fontsize: 50,
+            borderw: 2,
             bordercolor: "black",
             x: "(w-text_w)/2",
-            y: "120"
+            y: "100"
           },
-          inputs: "vfps",
+          inputs: "vout",
           outputs: "vfinal"
-        },
-
-        // Audio sync
-        {
-          filter: "aresample",
-          options: "async=1:first_pts=0",
-          inputs: "2:a",
-          outputs: "afinal"
         }
       ])
       .outputOptions([
         "-map [vfinal]",
-        "-map [afinal]",
+        "-map 2:a",
         "-shortest",
-        "-preset veryfast",
-        "-crf 28",
+        "-preset ultrafast",
+        "-crf 30",
         "-movflags +faststart",
         "-threads 1"
       ])
       .videoCodec("libx264")
       .audioCodec("aac")
-      .audioFrequency(44100)
-      .audioBitrate("192k")
+      .audioBitrate("128k")
       .on("end", () => {
-        console.log("FFmpeg finished");
+        console.log("Done");
 
         res.json({
           success: true,
@@ -129,30 +101,24 @@ app.post("/merge", async (req, res) => {
           downloadUrl: `/download/${id}`
         });
 
-        // Cleanup except output (deleted after download)
         [v1, v2, a1, textFile].forEach(file => {
           if (fs.existsSync(file)) fs.unlinkSync(file);
         });
       })
       .on("error", err => {
-        console.error("FFmpeg error:", err);
+        console.error(err);
         res.status(500).json({ error: err.message });
       })
       .save(output);
 
   } catch (err) {
-    console.error("Server error:", err);
-    res.status(500).json({ error: "Internal server error" });
+    console.error(err);
+    res.status(500).json({ error: "Server error" });
   }
 });
 
-// --------------------------------------------------
-// DOWNLOAD ROUTE
-// --------------------------------------------------
 app.get("/download/:id", (req, res) => {
-  const id = req.params.id;
-  const filePath = path.join(TMP_DIR, `${id}_final.mp4`);
-
+  const filePath = path.join(TMP_DIR, `${req.params.id}_final.mp4`);
   if (!fs.existsSync(filePath)) {
     return res.status(404).json({ error: "File not found" });
   }
@@ -162,14 +128,6 @@ app.get("/download/:id", (req, res) => {
   });
 });
 
-// --------------------------------------------------
-// HEALTH CHECK
-// --------------------------------------------------
-app.get("/health", (req, res) => {
-  res.json({ status: "ok" });
-});
-
-// --------------------------------------------------
 app.listen(process.env.PORT || 10000, () => {
-  console.log("Server running 🚀");
+  console.log("Server running");
 });
