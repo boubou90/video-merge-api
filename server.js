@@ -10,9 +10,9 @@ app.use(express.json());
 
 const TMP_DIR = "/tmp";
 
-// ----------------------
+// --------------------------------------------------
 // DOWNLOAD STREAM SAFE
-// ----------------------
+// --------------------------------------------------
 async function downloadFile(url, filepath) {
   const writer = fs.createWriteStream(filepath);
   const response = await axios({
@@ -29,9 +29,9 @@ async function downloadFile(url, filepath) {
   });
 }
 
-// ----------------------
+// --------------------------------------------------
 // MERGE ROUTE
-// ----------------------
+// --------------------------------------------------
 app.post("/merge", async (req, res) => {
   try {
     const { video1, video2, audio, hook } = req.body;
@@ -56,7 +56,6 @@ app.post("/merge", async (req, res) => {
     await downloadFile(video2, v2);
     await downloadFile(audio, a1);
 
-    // Write hook safely
     fs.writeFileSync(textFile, hook);
 
     console.log("Starting ffmpeg...");
@@ -65,8 +64,9 @@ app.post("/merge", async (req, res) => {
       .input(v1)
       .input(v2)
       .input(a1)
+      .inputOptions(["-stream_loop -1"]) // 🔥 loop audio
       .complexFilter([
-        // 1️⃣ Concat video
+        // Concat video
         {
           filter: "concat",
           options: { n: 2, v: 1, a: 0 },
@@ -74,7 +74,15 @@ app.post("/merge", async (req, res) => {
           outputs: "vconcat"
         },
 
-        // 2️⃣ Add hook text
+        // Stabilise fps
+        {
+          filter: "fps",
+          options: 30,
+          inputs: "vconcat",
+          outputs: "vfps"
+        },
+
+        // Hook text
         {
           filter: "drawtext",
           options: {
@@ -87,29 +95,15 @@ app.post("/merge", async (req, res) => {
             x: "(w-text_w)/2",
             y: "120"
           },
-          inputs: "vconcat",
+          inputs: "vfps",
           outputs: "vfinal"
         },
 
-        // 3️⃣ Clean audio
+        // Audio sync
         {
           filter: "aresample",
-          options: {
-            resampler: "soxr",
-            osr: 44100
-          },
+          options: "async=1:first_pts=0",
           inputs: "2:a",
-          outputs: "a1res"
-        },
-
-        {
-          filter: "loudnorm",
-          options: {
-            I: -16,
-            TP: -1.5,
-            LRA: 11
-          },
-          inputs: "a1res",
           outputs: "afinal"
         }
       ])
@@ -120,13 +114,12 @@ app.post("/merge", async (req, res) => {
         "-preset veryfast",
         "-crf 28",
         "-movflags +faststart",
-        "-threads 1" // important pour Render 512MB
+        "-threads 1"
       ])
       .videoCodec("libx264")
       .audioCodec("aac")
       .audioFrequency(44100)
       .audioBitrate("192k")
-      .fps(30)
       .on("end", () => {
         console.log("FFmpeg finished");
 
@@ -136,12 +129,12 @@ app.post("/merge", async (req, res) => {
           downloadUrl: `/download/${id}`
         });
 
-        // Cleanup sauf output
+        // Cleanup except output (deleted after download)
         [v1, v2, a1, textFile].forEach(file => {
           if (fs.existsSync(file)) fs.unlinkSync(file);
         });
       })
-      .on("error", (err) => {
+      .on("error", err => {
         console.error("FFmpeg error:", err);
         res.status(500).json({ error: err.message });
       })
@@ -153,9 +146,9 @@ app.post("/merge", async (req, res) => {
   }
 });
 
-// ----------------------
+// --------------------------------------------------
 // DOWNLOAD ROUTE
-// ----------------------
+// --------------------------------------------------
 app.get("/download/:id", (req, res) => {
   const id = req.params.id;
   const filePath = path.join(TMP_DIR, `${id}_final.mp4`);
@@ -169,14 +162,14 @@ app.get("/download/:id", (req, res) => {
   });
 });
 
-// ----------------------
+// --------------------------------------------------
 // HEALTH CHECK
-// ----------------------
+// --------------------------------------------------
 app.get("/health", (req, res) => {
   res.json({ status: "ok" });
 });
 
-// ----------------------
+// --------------------------------------------------
 app.listen(process.env.PORT || 10000, () => {
   console.log("Server running 🚀");
 });
