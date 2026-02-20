@@ -10,9 +10,6 @@ app.use(express.json());
 
 const TMP_DIR = "/tmp";
 
-// ----------------------
-// STREAM DOWNLOAD
-// ----------------------
 async function downloadFile(url, filepath) {
   const writer = fs.createWriteStream(filepath);
   const response = await axios({
@@ -28,9 +25,6 @@ async function downloadFile(url, filepath) {
   });
 }
 
-// ----------------------
-// MERGE ROUTE
-// ----------------------
 app.post("/merge", async (req, res) => {
   try {
     const { video1, video2, audio, hook } = req.body;
@@ -49,72 +43,72 @@ app.post("/merge", async (req, res) => {
     const textFile = path.join(TMP_DIR, `${id}_text.txt`);
     const output = path.join(TMP_DIR, `${id}_final.mp4`);
 
-    // Download assets
     await downloadFile(video1, v1);
     await downloadFile(video2, v2);
     await downloadFile(audio, a1);
 
-    // Write hook safely to text file (avoid escaping problems)
     fs.writeFileSync(textFile, hook);
 
     ffmpeg()
-  .input(v1)
-  .input(v2)
-  .input(a1)
-  .complexFilter([
-    {
-      filter: "concat",
-      options: { n: 2, v: 1, a: 0 },
-      inputs: ["0:v", "1:v"],
-      outputs: "vout"
-    },
-    {
-      filter: "drawtext",
-      options: {
-        fontfile: "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
-        textfile: textFile,
-        fontcolor: "white",
-        fontsize: 60,
-        borderw: 3,
-        bordercolor: "black",
-        x: "(w-text_w)/2",
-        y: "120"
-      },
-      inputs: "vout",
-      outputs: "vfinal"
-    },
-    {
-      filter: "loudnorm",
-      inputs: "2:a",
-      outputs: "afinal"
-    }
-  ])
-  .outputOptions([
-    "-map [vfinal]",
-    "-map [afinal]",
-    "-preset ultrafast",
-    "-crf 28",
-    "-movflags +faststart"
-  ])
-  .videoCodec("libx264")
-  .audioCodec("aac")
-  .on("end", () => {
-    res.download(output, () => {
-      [v1, v2, a1, textFile, output].forEach(file => {
-        if (fs.existsSync(file)) fs.unlinkSync(file);
-      });
-    });
-  })
-  .on("error", (err) => {
-    console.error("FFmpeg error:", err);
+      .input(v1)
+      .input(v2)
+      .input(a1)
+      .complexFilter([
+        {
+          filter: "concat",
+          options: { n: 2, v: 1, a: 0 },
+          inputs: ["0:v", "1:v"],
+          outputs: "vout"
+        },
+        {
+          filter: "drawtext",
+          options: {
+            fontfile: "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+            textfile: textFile,
+            fontcolor: "white",
+            fontsize: 60,
+            borderw: 3,
+            bordercolor: "black",
+            x: "(w-text_w)/2",
+            y: "120"
+          },
+          inputs: "vout",
+          outputs: "vfinal"
+        },
+        {
+          filter: "loudnorm",
+          inputs: "2:a",
+          outputs: "afinal"
+        }
+      ])
+      .outputOptions([
+        "-map [vfinal]",
+        "-map [afinal]",
+        "-preset ultrafast",
+        "-crf 28",
+        "-movflags +faststart"
+      ])
+      .videoCodec("libx264")
+      .audioCodec("aac")
+      .on("end", () => {
+        res.download(output, () => {
+          [v1, v2, a1, textFile, output].forEach(file => {
+            if (fs.existsSync(file)) fs.unlinkSync(file);
+          });
+        });
+      })
+      .on("error", (err) => {
+        console.error("FFmpeg error:", err);
+        res.status(500).json({ error: err.message });
+      })
+      .save(output);
+
+  } catch (err) {
+    console.error("Server error:", err);
     res.status(500).json({ error: err.message });
-  })
-  .save(output);
+  }
+}); // ← ICI c’était ce qui manquait
 
-
-// ----------------------
-// HEALTH CHECK
-// ----------------------
 app.get("/health", (req, res) => {
   res.json({ status: "ok" });
 });
