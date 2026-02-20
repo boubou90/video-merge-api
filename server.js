@@ -2,48 +2,41 @@ const express = require("express");
 const ffmpeg = require("fluent-ffmpeg");
 const axios = require("axios");
 const fs = require("fs");
-const path = require("path");
 const { v4: uuidv4 } = require("uuid");
 const { exec } = require("child_process");
 
 const app = express();
 app.use(express.json());
 
-/* ============================= */
-/* 🔍 HEALTH CHECK               */
-/* ============================= */
+/* ================================= */
+/* 🔎 HEALTH CHECK                   */
+/* ================================= */
 app.get("/health", (req, res) => {
   res.json({ status: "ok" });
 });
 
-/* ============================= */
-/* 🔍 FFMPEG TEST                */
-/* ============================= */
+/* ================================= */
+/* 🔎 FFMPEG TEST                    */
+/* ================================= */
 app.get("/ffmpeg-test", (req, res) => {
-  exec("ffmpeg -version", (error, stdout, stderr) => {
+  exec("ffmpeg -version", (error, stdout) => {
     if (error) {
-      return res.status(500).json({
-        success: false,
-        error: error.message
-      });
+      return res.status(500).json({ success: false, error: error.message });
     }
-    res.json({
-      success: true,
-      output: stdout
-    });
+    res.json({ success: true, output: stdout });
   });
 });
 
-/* ============================= */
-/* 🎬 MERGE ENDPOINT             */
-/* ============================= */
+/* ================================= */
+/* 🎬 MERGE + MUSIC ENDPOINT         */
+/* ================================= */
 app.post("/merge", async (req, res) => {
   try {
-    const { video1, video2 } = req.body;
+    const { video1, video2, audio } = req.body;
 
-    if (!video1 || !video2) {
+    if (!video1 || !video2 || !audio) {
       return res.status(400).json({
-        error: "video1 and video2 are required"
+        error: "video1, video2 and audio are required"
       });
     }
 
@@ -51,12 +44,14 @@ app.post("/merge", async (req, res) => {
 
     const video1Path = `/tmp/${id}_v1.mp4`;
     const video2Path = `/tmp/${id}_v2.mp4`;
+    const audioPath = `/tmp/${id}_a.mp3`;
     const concatFile = `/tmp/${id}_concat.txt`;
-    const outputPath = `/tmp/${id}_final.mp4`;
+    const mergedVideo = `/tmp/${id}_merged.mp4`;
+    const finalOutput = `/tmp/${id}_final.mp4`;
 
-    /* ---------------------------- */
-    /* ⬇️ DOWNLOAD FUNCTION         */
-    /* ---------------------------- */
+    /* ------------------------------ */
+    /* ⬇️ DOWNLOAD FUNCTION           */
+    /* ------------------------------ */
     const download = async (url, filePath) => {
       const writer = fs.createWriteStream(filePath);
       const response = await axios({
@@ -73,36 +68,65 @@ app.post("/merge", async (req, res) => {
       });
     };
 
-    /* ---------------------------- */
-    /* ⬇️ DOWNLOAD VIDEOS           */
-    /* ---------------------------- */
+    /* ------------------------------ */
+    /* ⬇️ DOWNLOAD FILES              */
+    /* ------------------------------ */
     await download(video1, video1Path);
     await download(video2, video2Path);
+    await download(audio, audioPath);
 
-    /* ---------------------------- */
-    /* 📝 CREATE CONCAT FILE        */
-    /* ---------------------------- */
+    /* ------------------------------ */
+    /* 📝 CREATE CONCAT FILE          */
+    /* ------------------------------ */
     fs.writeFileSync(
       concatFile,
       `file '${video1Path}'\nfile '${video2Path}'`
     );
 
-    /* ---------------------------- */
-    /* 🎬 FFMPEG LIGHT CONCAT       */
-    /* ---------------------------- */
+    /* ------------------------------ */
+    /* 🎬 STEP 1 - MERGE VIDEOS       */
+    /* (NO RE-ENCODE, LOW RAM)        */
+    /* ------------------------------ */
+    await new Promise((resolve, reject) => {
+      ffmpeg()
+        .input(concatFile)
+        .inputOptions(["-f concat", "-safe 0"])
+        .outputOptions(["-c copy"])
+        .save(mergedVideo)
+        .on("end", resolve)
+        .on("error", reject);
+    });
+
+    /* ------------------------------ */
+    /* 🎵 STEP 2 - ADD AUDIO          */
+    /* ------------------------------ */
     ffmpeg()
-      .input(concatFile)
-      .inputOptions(["-f concat", "-safe 0"])
-      .outputOptions(["-c copy"])
-      .save(outputPath)
+      .input(mergedVideo)
+      .input(audioPath)
+      .outputOptions([
+        "-map 0:v:0",
+        "-map 1:a:0",
+        "-shortest",
+        "-c:v copy",
+        "-c:a aac",
+        "-b:a 128k"
+      ])
+      .save(finalOutput)
       .on("end", () => {
 
-        const stream = fs.createReadStream(outputPath);
+        const stream = fs.createReadStream(finalOutput);
+        res.setHeader("Content-Type", "video/mp4");
         stream.pipe(res);
 
         stream.on("close", () => {
-          // nettoyage
-          [video1Path, video2Path, concatFile, outputPath].forEach(file => {
+          [
+            video1Path,
+            video2Path,
+            audioPath,
+            concatFile,
+            mergedVideo,
+            finalOutput
+          ].forEach(file => {
             if (fs.existsSync(file)) {
               fs.unlinkSync(file);
             }
@@ -120,12 +144,11 @@ app.post("/merge", async (req, res) => {
   }
 });
 
-/* ============================= */
-/* 🚀 START SERVER               */
-/* ============================= */
+/* ================================= */
+/* 🚀 START SERVER                   */
+/* ================================= */
 const PORT = process.env.PORT || 3000;
 
 app.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
-
